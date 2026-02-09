@@ -1,0 +1,495 @@
+<?php
+session_start();
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id']) || intval($_SESSION['role_id']) !== 3) {
+    header('Location: index.php');
+    exit;
+}
+
+// Get filters
+$startDate = $_GET['start_date'] ?? date('Y-m-d', strtotime('-30 days'));
+$endDate = $_GET['end_date'] ?? date('Y-m-d');
+$paymentMethod = $_GET['payment_method'] ?? 'all';
+$searchBill = $_GET['search'] ?? '';
+
+// Build query
+$query = "
+    SELECT 
+        b.bill_id,
+        b.rental_id,
+        b.total_room_cost,
+        b.total_orders_cost,
+        b.grand_total,
+        b.is_paid,
+        b.created_at,
+        rm.room_number,
+        rt.type_name,
+        p.amount_paid,
+        p.payment_method,
+        p.paid_at,
+        r.started_at,
+        r.ended_at
+    FROM bills b
+    LEFT JOIN rentals r ON b.rental_id = r.rental_id
+    LEFT JOIN rooms rm ON r.room_id = rm.room_id
+    LEFT JOIN room_types rt ON rm.room_type_id = rt.room_type_id
+    LEFT JOIN payments p ON b.bill_id = p.bill_id
+    WHERE DATE(b.created_at) BETWEEN ? AND ?
+";
+
+$params = [$startDate, $endDate];
+$types = 'ss';
+
+if ($paymentMethod !== 'all') {
+    $query .= " AND p.payment_method = ?";
+    $params[] = $paymentMethod;
+    $types .= 's';
+}
+
+if (!empty($searchBill)) {
+    $query .= " AND (b.bill_id = ? OR rm.room_number = ?)";
+    $params[] = intval($searchBill);
+    $params[] = intval($searchBill);
+    $types .= 'ii';
+}
+
+$query .= " ORDER BY b.created_at DESC";
+
+$stmt = $mysqli->prepare($query);
+if (!empty($params)) {
+    $stmt->bind_param($types, ...$params);
+}
+$stmt->execute();
+$transactions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+// Summary stats
+$totalRevenue = array_sum(array_column($transactions, 'grand_total'));
+$totalPaid = array_sum(array_column($transactions, 'amount_paid'));
+$totalOrders = array_sum(array_column($transactions, 'total_orders_cost'));
+
+$cashierName = htmlspecialchars($_SESSION['display_name'] ?: $_SESSION['username']);
+?>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Transaction History</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f4c430;
+      color: #2c2c2c;
+      min-height: 100vh;
+    }
+    
+    header {
+      background: #2c2c2c;
+      color: white;
+      padding: 1.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    
+    .header-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 2rem;
+    }
+    
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    
+    .header-left i {
+      font-size: 1.75rem;
+      color: #f4c430;
+    }
+    
+    .header-title {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+    
+    .back-link {
+      padding: 0.5rem 1rem;
+      background: #f4c430;
+      color: #2c2c2c;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.2s;
+    }
+    
+    .back-link:hover {
+      background: #f2a20a;
+    }
+    
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+    
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    
+    .stat-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      text-align: center;
+    }
+    
+    .stat-icon {
+      font-size: 2rem;
+      color: #f4c430;
+      margin-bottom: 0.5rem;
+    }
+    
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #2c2c2c;
+    }
+    
+    .stat-label {
+      font-size: 0.875rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+    
+    .filter-card {
+      background: white;
+      padding: 1.5rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      margin-bottom: 2rem;
+    }
+    
+    .filter-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    
+    .filter-group {
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .filter-label {
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: #2c2c2c;
+      margin-bottom: 0.5rem;
+    }
+    
+    .filter-input,
+    .filter-select {
+      padding: 0.5rem;
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-family: inherit;
+    }
+    
+    .filter-input:focus,
+    .filter-select:focus {
+      outline: none;
+      border-color: #f4c430;
+      box-shadow: 0 0 0 3px rgba(244, 196, 48, 0.1);
+    }
+    
+    .filter-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    
+    .btn-filter {
+      flex: 1;
+      padding: 0.5rem 1rem;
+      background: #f4c430;
+      color: #2c2c2c;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    
+    .btn-filter:hover {
+      background: #f2a20a;
+    }
+    
+    .btn-reset {
+      padding: 0.5rem 1rem;
+      background: #e9ecef;
+      color: #2c2c2c;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+    
+    .btn-reset:hover {
+      background: #dee2e6;
+    }
+    
+    .transactions-table {
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    thead {
+      background: linear-gradient(135deg, #f4c430 0%, #f2a20a 100%);
+      color: #2c2c2c;
+    }
+    
+    th {
+      padding: 1rem;
+      text-align: left;
+      font-weight: 700;
+      font-size: 0.875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid #e9ecef;
+      font-size: 0.875rem;
+    }
+    
+    tbody tr:hover {
+      background: #fafbfc;
+    }
+    
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    
+    .bill-id {
+      font-weight: 600;
+      color: #f4c430;
+    }
+    
+    .room-info {
+      font-weight: 600;
+      color: #2c2c2c;
+    }
+    
+    .badge {
+      display: inline-block;
+      padding: 0.4rem 0.8rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    
+    .badge-paid {
+      background: #d4edda;
+      color: #155724;
+    }
+    
+    .badge-unpaid {
+      background: #f8d7da;
+      color: #721c24;
+    }
+    
+    .badge-cash {
+      background: #cfe2ff;
+      color: #084298;
+    }
+    
+    .badge-gcash {
+      background: #e7d4f5;
+      color: #5a189a;
+    }
+    
+    .amount {
+      font-weight: 700;
+      color: #f4c430;
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 3rem;
+      color: #666;
+    }
+    
+    .empty-state i {
+      font-size: 3rem;
+      color: #ddd;
+      margin-bottom: 1rem;
+    }
+    
+    .row-details {
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      color: #f4c430;
+      transition: all 0.2s;
+    }
+    
+    .row-details:hover {
+      background: #fffbf0;
+    }
+    
+    @media (max-width: 768px) {
+      table {
+        font-size: 0.75rem;
+      }
+      
+      th, td {
+        padding: 0.75rem 0.5rem;
+      }
+      
+      .filter-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-container">
+      <div class="header-left">
+        <i class="fas fa-history"></i>
+        <div>
+          <div class="header-title">Transaction History</div>
+        </div>
+      </div>
+      <a href="cashier.php" class="back-link">
+        <i class="fas fa-arrow-left"></i>
+        Back to Dashboard
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <!-- Statistics -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-receipt"></i></div>
+        <div class="stat-value"><?= count($transactions) ?></div>
+        <div class="stat-label">Total Transactions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+        <div class="stat-value">₱<?= number_format($totalRevenue, 2) ?></div>
+        <div class="stat-label">Total Revenue</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+        <div class="stat-value">₱<?= number_format($totalPaid, 2) ?></div>
+        <div class="stat-label">Paid Amount</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon"><i class="fas fa-utensils"></i></div>
+        <div class="stat-value">₱<?= number_format($totalOrders, 2) ?></div>
+        <div class="stat-label">Orders Revenue</div>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filter-card">
+      <form method="GET" id="filterForm">
+        <div class="filter-grid">
+          <div class="filter-group">
+            <label class="filter-label">From Date</label>
+            <input type="date" name="start_date" class="filter-input" value="<?= htmlspecialchars($startDate) ?>">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">To Date</label>
+            <input type="date" name="end_date" class="filter-input" value="<?= htmlspecialchars($endDate) ?>">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Payment Method</label>
+            <select name="payment_method" class="filter-select">
+              <option value="all" <?= $paymentMethod === 'all' ? 'selected' : '' ?>>All Methods</option>
+              <option value="CASH" <?= $paymentMethod === 'CASH' ? 'selected' : '' ?>>Cash</option>
+              <option value="GCASH" <?= $paymentMethod === 'GCASH' ? 'selected' : '' ?>>GCash</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Search (Bill/Room)</label>
+            <input type="text" name="search" class="filter-input" placeholder="Enter bill ID or room #" value="<?= htmlspecialchars($searchBill) ?>">
+          </div>
+        </div>
+        <div class="filter-actions">
+          <button type="submit" class="btn-filter">
+            <i class="fas fa-search"></i>
+            Apply Filters
+          </button>
+          <a href="transactions.php" class="btn-reset">
+            <i class="fas fa-redo"></i>
+            Reset
+          </a>
+        </div>
+      </form>
+    </div>
+
+    <!-- Transactions Table -->
+    <div class="transactions-table">
+      <?php if (count($transactions) > 0): ?>
+        <table>
+          <thead>
+            <tr>
+              <th>Bill ID</th>
+              <th>Room</th>
+              <th>Date</th>
+              <th>Room Cost</th>
+              <th>Orders</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Payment Method</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($transactions as $t): ?>
+            <tr>
+              <td><span class="bill-id">#<?= $t['bill_id'] ?></span></td>
+              <td><span class="room-info">Room <?= $t['room_number'] ?> (<?= $t['type_name'] ?>)</span></td>
+              <td><?= date('M d, Y h:i A', strtotime($t['created_at'])) ?></td>
+              <td>₱<?= number_format($t['total_room_cost'], 2) ?></td>
+              <td>₱<?= number_format($t['total_orders_cost'], 
