@@ -489,7 +489,51 @@ $cashierName = htmlspecialchars($_SESSION['display_name'] ?: $_SESSION['username
             <?php foreach ($transactions as $t): ?>
             <tr>
               <td><span class="bill-id">#<?= $t['bill_id'] ?></span></td>
-              <td><span class="room-info">Room <?= $t['room_number'] ?> (<?= $t['type_name'] ?>)</span></td>
-              <td><?= date('M d, Y h:i A', strtotime($t['created_at'])) ?></td>
+              <td>
+                <span class="room-info">Room <?= htmlspecialchars($t['room_number']) ?></span><br>
+                <small style="color: #666;"><?= htmlspecialchars($t['type_name']) ?></small>
+              </td>
+              <td><?= date('M d, Y', strtotime($t['created_at'])) ?><br>
+                  <small style="color: #666;"><?= date('h:i A', strtotime($t['created_at'])) ?></small>
+              </td>
               <td>₱<?= number_format($t['total_room_cost'], 2) ?></td>
-              <td>₱<?= number_format($t['total_orders_cost'], 
+              <td>₱<?= number_format($t['total_orders_cost'], 2) ?></td>
+              <td><span class="amount">₱<?= number_format($t['grand_total'], 2) ?></span></td>
+              <td>
+                <?php if ($t['is_paid']): ?>
+                  <span class="badge badge-paid">Paid</span>
+                <?php else: ?>
+                  <span class="badge badge-unpaid">Unpaid</span>
+                <?php endif; ?>
+              </td>
+              <td>
+                <?php if ($t['payment_method']): ?>
+                  <span class="badge badge-<?= strtolower($t['payment_method']) ?>">
+                    <?= htmlspecialchars($t['payment_method']) ?>
+                  </span>
+                <?php else: ?>
+                  <span style="color: #999;">N/A</span>
+                <?php endif; ?>
+              </td>
+              <td>
+                <a href="view_bill.php?id=<?= $t['bill_id'] ?>" class="row-details" title="View Details">
+                  <i class="fas fa-eye"></i>
+                </a>
+                <a href="print_receipt.php?id=<?= $t['bill_id'] ?>" class="row-details" title="Print" target="_blank">
+                  <i class="fas fa-print"></i>
+                </a>
+              </td>
+            </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      <?php else: ?>
+        <div class="empty-state">
+          <i class="fas fa-search"></i>
+          <p>No transactions found matching your filters.</p>
+        </div>
+      <?php endif; ?>
+    </div>
+  </main>
+</body>
+</html>
